@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Number check</title>
+<style>
+  :root { --bg:#f5f7f6; --ink:#16231f; --muted:#5d6b66; --line:#d5dcd9; --accent:#1f6f5c; --card:#fff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#101716; --ink:#e8efec; --muted:#9aa9a3; --line:#2a3633; --accent:#5cc3a6; --card:#17211f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 1.7rem; margin: 0 0 8px; }
+  p { color: var(--muted); margin: 0 0 20px; }
+  input, select { width:100%; padding:10px; margin-bottom:12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); font:inherit; }
+  li input { width:20px; height:20px; padding:0; margin:0; accent-color:var(--accent); }
+  button { font: inherit; padding: 12px 18px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--accent); }
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  #bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 16px 0; }
+  #bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  ul { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--line); }
+  li { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  li.done .name { text-decoration: line-through; color: var(--muted); }
+  .name { flex: 1; }
+  .name small { display: block; color: var(--muted); }
+  .tag { color: var(--accent); font-weight: 600; }
+  h2 { font-size: 1.05rem; margin: 28px 0 8px; }
+  #status { color: var(--muted); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 24px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Number check</h1>
+  <p>Find the accounts that may use your phone number, so you can update them before you change it.
+     Your email is read in this browser only. Nothing is sent to a server.</p>
+
+  <section id="start">
+    <input id="cid" placeholder="Google client ID">
+    <label for="limit" style="color:var(--muted)">How many emails to check per search</label>
+    <select id="limit">
+      <option value="200">200 (fast)</option>
+      <option value="500">500</option>
+      <option value="1000" selected>1000</option>
+      <option value="2000">2000 (slow, most complete)</option>
+    </select>
+    <button id="signin">Sign in with Google</button>
+  </section>
+
+  <section id="scan" hidden>
+    <div id="status">Starting...</div>
+    <div id="bar"><i></i></div>
+  </section>
+
+  <section id="results" hidden>
+    <div id="summary"></div>
+    <div id="lists"></div>
+    <div class="row">
+      <button id="copy">Copy list</button>
+      <button class="ghost" id="clear">Delete my saved ticks</button>
+    </div>
+  </section>
+</main>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+// ---------- Settings ----------
+const CLIENT_ID = ""; // optional: put your client ID here
+const SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+
+// Search 1: emails about codes and phone numbers (strong signal).
+const STRONG = 'in:anywhere ("verification code" OR "security code" OR "one-time" OR OTP OR "2-step" OR "two-step" OR "two-factor" OR 2FA OR "phone number" OR "mobile number" OR "confirm your number" OR "sign-in code" OR "login code" OR "passcode" OR "authentication code")';
+// Search 2: sign-up and security emails (shows the account exists).
+const WIDE = 'in:anywhere (welcome OR "verify your email" OR "confirm your email" OR "confirm your account" OR "activate your account" OR "password reset" OR "reset your password" OR "new sign-in" OR "new login" OR "new device" OR "suspicious" OR "your account")';
+
+const PERSONAL = ["gmail.com","googlemail.com","yahoo.com","outlook.com","hotmail.com","icloud.com","live.com","aol.com","proton.me","protonmail.com"];
+
+// domain -> [display name, security settings link, priority (1 = most important)]
+const KNOWN = {
+  "google.com": ["Google", "https://myaccount.google.com/security", 1],
+  "apple.com": ["Apple ID", "https://account.apple.com", 1],
+  "microsoft.com": ["Microsoft", "https://account.microsoft.com/security", 1],
+  "paypal.com": ["PayPal", "https://www.paypal.com/myaccount/settings", 1],
+  "amazon.com": ["Amazon", "https://www.amazon.com/a/settings/approval", 2],
+  "amazon.co.uk": ["Amazon UK", "https://www.amazon.co.uk/a/settings/approval", 2],
+  "facebook.com": ["Facebook", "https://accountscenter.facebook.com/password_and_security", 2],
+  "facebookmail.com": ["Facebook", "https://accountscenter.facebook.com/password_and_security", 2],
+  "instagram.com": ["Instagram", "https://accountscenter.instagram.com/password_and_security", 2],
+  "whatsapp.com": ["WhatsApp", "https://www.whatsapp.com", 2],
+  "x.com": ["X", "https://x.com/settings/account", 3],
+  "twitter.com": ["X", "https://x.com/settings/account", 3],
+  "linkedin.com": ["LinkedIn", "https://www.linkedin.com/psettings/phone", 3],
+  "revolut.com": ["Revolut", "https://app.revolut.com", 1],
+  "wise.com": ["Wise", "https://wise.com/settings", 1],
+  "coinbase.com": ["Coinbase", "https://www.coinbase.com/settings", 1],
+  "binance.com": ["Binance", "https://www.binance.com/en/my/security", 1],
+  "uber.com": ["Uber", "https://account.uber.com", 3],
+  "ebay.com": ["eBay", "https://www.ebay.com/myb/Summary", 3],
+  "discord.com": ["Discord", "https://discord.com/channels/@me", 3],
+  "telegram.org": ["Telegram", "https://telegram.org", 2]
+};
+const MONEY_HINTS = ["bank","pay","invest","trade","broker","finance","credit","capital","wallet","crypto","forex","mortgage","insurance","pension","tax"];
+
+// ---------- Helpers ----------
+const $ = id => document.getElementById(id);
+const STORE = "numbercheck.ticks";
+const loadTicks = () => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch { return {}; } };
+const saveTicks = t => { try { localStorage.setItem(STORE, JSON.stringify(t)); } catch {} };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function baseDomain(host) {
+  const parts = host.toLowerCase().split(".");
+  if (parts.length <= 2) return host.toLowerCase();
+  const two = ["co.uk","org.uk","com.au","co.nz","co.in","com.br","co.za","co.jp"];
+  const lastTwo = parts.slice(-2).join(".");
+  return two.includes(lastTwo) ? parts.slice(-3).join(".") : lastTwo;
+}
+
+function parseFrom(header) {
+  const m = header.match(/^\s*"?([^"<]*)"?\s*<([^>]+)>/) || [null, "", header.trim()];
+  const host = m[2].trim().split("@")[1];
+  return host ? { name: m[1].trim(), domain: baseDomain(host) } : null;
+}
+
+async function gmail(path, token) {
+  for (let i = 0; i < 5; i++) {
+    const r = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/" + path,
+      { headers: { Authorization: "Bearer " + token } });
+    if (r.ok) return r.json();
+    if (r.status === 429 || r.status === 403) { await sleep(600 * 2 ** i); continue; } // slow down, retry
+    throw new Error("Gmail said " + r.status);
+  }
+  throw new Error("Gmail is busy. Try again in a minute.");
+}
+
+function setProgress(text, pct) {
+  $("status").textContent = text;
+  document.querySelector("#bar i").style.width = pct + "%";
+}
+
+// ---------- Scan ----------
+async function listIds(q, token, max, seen, strong, label) {
+  let page = "", n = 0;
+  while (n < max) {
+    const res = await gmail("messages?maxResults=500&q=" + encodeURIComponent(q) + (page ? "&pageToken=" + page : ""), token);
+    for (const m of res.messages || []) {
+      if (n++ >= max) break;
+      if (!seen.has(m.id)) seen.set(m.id, strong);
+    }
+    setProgress(label + " " + seen.size + " emails found...", 5);
+    if (!res.nextPageToken) break;
+    page = res.nextPageToken;
+  }
+}
+
+async function runScan(token, max) {
+  $("start").hidden = true;
+  $("scan").hidden = false;
+  try {
+    const seen = new Map(); // email id -> found by the strong search?
+    await listIds(STRONG, token, max, seen, true, "Code emails:");
+    await listIds(WIDE, token, max, seen, false, "Sign-up emails:");
+
+    const ids = [...seen.keys()];
+    const found = {}; // domain -> { name, count, strong, last }
+    let done = 0;
+    for (let i = 0; i < ids.length; i += 8) {
+      const batch = ids.slice(i, i + 8);
+      const msgs = await Promise.all(batch.map(id =>
+        gmail("messages/" + id + "?format=metadata&metadataHeaders=From&fields=internalDate,payload/headers", token).then(m => [id, m]).catch(() => null)));
+      for (const r of msgs) {
+        if (!r) continue;
+        const [id, m] = r;
+        const h = (m.payload && m.payload.headers || []).find(x => x.name.toLowerCase() === "from");
+        const who = h && parseFrom(h.value);
+        if (!who || PERSONAL.includes(who.domain)) continue;
+        const f = found[who.domain] = found[who.domain] || { name: who.name, count: 0, strong: false, last: 0 };
+        f.count++;
+        f.strong = f.strong || seen.get(id);
+        f.last = Math.max(f.last, Number(m.internalDate) || 0);
+      }
+      done += batch.length;
+      setProgress("Checked " + done + " of " + ids.length + " emails...", 10 + (done / ids.length) * 90);
+    }
+    showResults(found);
+  } catch (e) {
+    setProgress("Something went wrong: " + e.message + " Reload and sign in again.", 0);
+  }
+}
+
+// ---------- Results ----------
+let CURRENT = [];
+
+function showResults(found) {
+  const items = Object.entries(found).map(([domain, v]) => {
+    const k = KNOWN[domain];
+    const money = MONEY_HINTS.some(w => domain.includes(w));
+    return {
+      domain, name: k ? k[0] : (v.name || domain),
+      link: k ? k[1] : "https://" + domain,
+      priority: k ? k[2] : (money ? 1 : 4),
+      count: v.count, strong: v.strong,
+      year: v.last ? new Date(v.last).getFullYear() : ""
+    };
+  }).sort((a, b) => a.priority - b.priority || b.strong - a.strong || b.count - a.count);
+  CURRENT = items;
+
+  $("scan").hidden = true;
+  $("results").hidden = false;
+  const ticks = loadTicks();
+  const groups = [
+    [1, "Update first: email, money and big accounts"],
+    [2, "Update next: social and shopping"],
+    [3, "Then these"],
+    [4, "Other services found"]
+  ];
+  const lists = $("lists");
+  lists.innerHTML = "";
+  for (const [p, title] of groups) {
+    const part = items.filter(i => i.priority === p);
+    if (!part.length) continue;
+    const h = document.createElement("h2"); h.textContent = title;
+    const ul = document.createElement("ul");
+    for (const it of part) {
+      const li = document.createElement("li");
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.id = "c-" + it.domain;
+      cb.checked = !!ticks[it.domain];
+      li.classList.toggle("done", cb.checked);
+      cb.addEventListener("change", () => {
+        const t = loadTicks(); t[it.domain] = cb.checked; saveTicks(t);
+        li.classList.toggle("done", cb.checked); updateSummary(items.length);
+      });
+      const label = document.createElement("label"); label.className = "name"; label.htmlFor = cb.id;
+      label.textContent = it.name;
+      const small = document.createElement("small");
+      small.textContent = it.domain + " (" + it.count + " emails" + (it.year ? ", last seen " + it.year : "") + ") ";
+      if (it.strong) { const t = document.createElement("span"); t.className = "tag"; t.textContent = "Uses a code"; small.appendChild(t); }
+      label.appendChild(small);
+      const a = document.createElement("a"); a.href = it.link; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.textContent = "Open settings"; a.style.color = "var(--accent)";
+      li.append(cb, label, a); ul.appendChild(li);
+    }
+    lists.append(h, ul);
+  }
+  if (!items.length) lists.textContent = "Nothing found. Check your other inboxes and your texts too.";
+  updateSummary(items.length);
+}
+
+function updateSummary(total) {
+  const n = Object.values(loadTicks()).filter(Boolean).length;
+  $("summary").innerHTML = "";
+  const p = document.createElement("p");
+  p.textContent = total && n >= total
+    ? "All done. It is safe to change your number. Keep the old one active for a few days."
+    : n + " of " + total + " updated. Services tagged \"Uses a code\" matter most. Also check your texts and password manager.";
+  $("summary").appendChild(p);
+}
+
+// ---------- Wire up ----------
+$("signin").addEventListener("click", () => {
+  const id = CLIENT_ID || $("cid").value.trim();
+  if (!id) { alert("Add your Google client ID first."); return; }
+  if (!window.google || !google.accounts) { alert("Google sign-in did not load. Check your connection."); return; }
+  const max = Number($("limit").value);
+  google.accounts.oauth2.initTokenClient({
+    client_id: id, scope: SCOPE,
+    callback: resp => { if (resp.access_token) runScan(resp.access_token, max); }
+  }).requestAccessToken();
+});
+
+$("copy").addEventListener("click", async () => {
+  const text = CURRENT.map(i => i.name + " (" + i.domain + ")" + (i.strong ? " - uses a code" : "")).join("\n");
+  try { await navigator.clipboard.writeText(text); $("copy").textContent = "Copied"; } catch { alert(text); }
+});
+
+$("clear").addEventListener("click", () => {
+  try { localStorage.removeItem(STORE); } catch {}
+  location.reload();
+});
+</script>
+</body>
+</html>
